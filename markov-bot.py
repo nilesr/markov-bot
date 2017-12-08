@@ -1,7 +1,11 @@
+print('------')
+print("Logging in now...")
 import discord
 import asyncio
 
-import sqlite3, copy, random, traceback, collections
+import sqlite3, copy, random, traceback, collections, urllib.request, urllib, json, sys
+sys.path.append(".")
+import mask
 con = sqlite3.connect("markov.db")
 con.execute("CREATE TABLE IF NOT EXISTS main (key TEXT, value TEXT, count INTEGER);")
 con.execute("CREATE TABLE IF NOT EXISTS emotes (key TEXT, value TEXT);")
@@ -27,7 +31,7 @@ def markov_add(m):
       #db.Insert("main", key = words[i], value = [words[i + 1]])
       con.execute("INSERT INTO main (key, value, count) VALUES (?, ?, ?)", [words[i], words[i + 1], 1])
     else:
-      con.execute("UPDATE main SET value = value + 1 WHERE key = ? AND value = ?", [words[i], words[i + 1]])
+      con.execute("UPDATE main SET count = count + 1 WHERE key = ? AND value = ?", [words[i], words[i + 1]])
       #new_value = copy.deepcopy(exists[0]["value"])
       #new_value.append(words[i + 1])
       #db.Update("main", exists, value = new_value)
@@ -41,6 +45,28 @@ def random_word():
   #return con.execute("SELECT key FROM main LIMIT 1 OFFSET " + str(where)).fetchone()[0]
 
   return con.execute("SELECT key FROM main ORDER BY RANDOM() LIMIT 1;").fetchone()[0]
+
+async def react(message, success):
+  emoji = "✅" if success else "❎"
+  if message.channel.permissions_for(message.server.me).add_reactions:
+    print("Permission to react, reacting")
+    try:
+      await client.add_reaction(message, emoji)
+    except:
+      await client.send_message(message.channel, "Failed to react with " + emoji)
+      await client.send_message(message.channel, "```" + traceback.format_exc() + "```")
+  else:
+    print("No permission to react, sending message")
+    client.send_message(message.channel, "No permission to react with " + emoji);
+async def notify_pref(message, split):
+  try:
+    print("Sending request...")
+    urllib.request.urlopen("http://api.nanoshinono.me:6405/status_recv", data = urllib.parse.urlencode({"message": json.dumps(split)}).encode("utf-8"));
+    await react(message, True)
+  except:
+    if "prefetcher" in str(message.author).lower() or "⛄⛵" in str(message.author).lower():
+      await client.send_message(message.channel, "```" + traceback.format_exc() + "```");
+    await react(message, False)
 
 def make_message(arg = False):
   message = []
@@ -111,6 +137,9 @@ async def on_message(message):
   print("Got message on channel ", message.channel, "from author", message.author, ":", message.content)
   #print("Author: ", message.author, type(message.author))
   #print("Channel: ", message.channel, type(message.channel))
+  if (message.author.bot):
+    print("DISCARDING BOT MESSAGE FROM ", message.author)
+    return
   if type(message.channel) == discord.channel.PrivateChannel:
     print("DISCARDING PRIVATE MESSAGE FROM", message.author)
     return
@@ -119,7 +148,10 @@ async def on_message(message):
     return
   split = message.content.split()
   if len(split) == 0: return
-  if split[0] == "!help":
+  if split[0] == "!down":
+    await notify_pref(message, split)
+    pass
+  elif split[0] == "!help":
     await client.send_message(message.channel, "Commands: `!markov` - Generates random text based on collected probabilities\n`!markov <starting word>` - Generates starting from a particular word\n`!markov <limit>` - Generates random text with the given length\n`!percents <word>` - Shows statistics on the given word")
   elif split[0] == "!markov":
     args = message.content.split()
@@ -133,8 +165,11 @@ async def on_message(message):
     await client.send_message(message.channel, percents)
   elif split[0] == "!emotes":
     await client.send_message(message.channel, " ".join([x[0] for x in con.execute("SELECT value FROM emotes;").fetchall()]))
+  elif split[0] == "!mask":
+    await client.send_message(message.channel, mask.mask(" ".join(split[1:])))
   elif len(split) == 1:
-    if split[0] in ["no", "yes"]: return;
+    return;
+    if split[0] in ["no", "yes", "yeah", "rip", "oh", "hehe", "xd", "xD", "ayy", "lol", "what", "y", "n", "s", "waitwhat", "oof", "ok", "lmao", "Yes", "Nice"]: return;
     #res = db.Select("emotes", key = split[0])
     res = con.execute("SELECT value FROM emotes WHERE key = ?", [split[0]]).fetchall()
     if len(res) != 0:
