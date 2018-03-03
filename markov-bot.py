@@ -3,12 +3,13 @@ print("Logging in now...")
 import discord
 import asyncio
 
-import sqlite3, copy, random, traceback, collections, urllib.request, urllib, json, sys
+import sqlite3, copy, random, traceback, collections, urllib.request, urllib, json, sys, time
 sys.path.append(".")
 import mask
 con = sqlite3.connect("markov.db")
 con.execute("CREATE TABLE IF NOT EXISTS main (key TEXT, value TEXT, count INTEGER);")
 con.execute("CREATE TABLE IF NOT EXISTS emotes (key TEXT, value TEXT);")
+con.execute("CREATE INDEX IF NOT EXISTS the_index ON main (key, value)")
 
 client = discord.Client()
 
@@ -28,22 +29,12 @@ def markov_add(m):
   for i in range(len(words) - 1):
     exists = con.execute("SELECT count FROM main WHERE key = ? AND value = ?", [words[i], words[i + 1]]).fetchall()
     if len(exists) == 0:
-      #db.Insert("main", key = words[i], value = [words[i + 1]])
       con.execute("INSERT INTO main (key, value, count) VALUES (?, ?, ?)", [words[i], words[i + 1], 1])
     else:
       con.execute("UPDATE main SET count = count + 1 WHERE key = ? AND value = ?", [words[i], words[i + 1]])
-      #new_value = copy.deepcopy(exists[0]["value"])
-      #new_value.append(words[i + 1])
-      #db.Update("main", exists, value = new_value)
   con.commit()
 
 def random_word():
-  #return random.choice(db.Dump("main"))["key"]
-
-  #total = int(con.execute("SELECT COUNT(*) FROM main").fetchall()[0][0])
-  #where = random.randint(1, total)
-  #return con.execute("SELECT key FROM main LIMIT 1 OFFSET " + str(where)).fetchone()[0]
-
   return con.execute("SELECT key FROM main ORDER BY RANDOM() LIMIT 1;").fetchone()[0]
 
 async def react(message, success):
@@ -64,7 +55,7 @@ async def notify_pref(message, split):
     urllib.request.urlopen("http://api.nanoshinono.me:6405/status_recv", data = urllib.parse.urlencode({"message": json.dumps(split)}).encode("utf-8"));
     await react(message, True)
   except:
-    if "prefetcher" in str(message.author).lower() or "⛄⛵" in str(message.author).lower():
+    if "prefetcher" in str(message.author).lower() or "helvetica toast" in str(message.author).lower():
       await client.send_message(message.channel, "```" + traceback.format_exc() + "```");
     await react(message, False)
 
@@ -134,7 +125,7 @@ def parse_emotes(msg):
 
 @client.event
 async def on_message(message):
-  print("Got message on channel ", message.channel, "from author", message.author, ":", message.content)
+  start = time.time()
   #print("Author: ", message.author, type(message.author))
   #print("Channel: ", message.channel, type(message.channel))
   if (message.author.bot):
@@ -146,9 +137,13 @@ async def on_message(message):
   if "markov-bot" in str(message.author) or "MikuBot" in str(message.author):
     print("Discarding self message")
     return
+  print("Got message on channel ", message.channel, "from author", message.author, ":", message.content)
   split = message.content.split()
   if len(split) == 0: return
-  if split[0] == "!down":
+  if split[0] in ["?small", "?big"]:
+    if "welcome-center" in str(message.channel):
+      await client.send_message(message.server.get_channel('308342435430400012'), "Welcome <@" +str(message.author.id) + ">!");
+  elif split[0] == "!down":
     await notify_pref(message, split)
     pass
   elif split[0] == "!help":
@@ -167,6 +162,13 @@ async def on_message(message):
     await client.send_message(message.channel, " ".join([x[0] for x in con.execute("SELECT value FROM emotes;").fetchall()]))
   elif split[0] == "!mask":
     await client.send_message(message.channel, mask.mask(" ".join(split[1:])))
+  elif split[0] == "!mask10":
+    msg = []
+    curr = mask.mask(" ".join(split[1:]))
+    for i in range(10):
+      msg.append(curr)
+      curr = mask.mask(curr)
+    await client.send_message(message.channel, "\n".join(msg))
   elif len(split) == 1:
     return;
     if split[0] in ["no", "yes", "yeah", "rip", "oh", "hehe", "xd", "xD", "ayy", "lol", "what", "y", "n", "s", "waitwhat", "oof", "ok", "lmao", "Yes", "Nice"]: return;
@@ -177,5 +179,5 @@ async def on_message(message):
       await client.send_message(message.channel, res[0][0])
   else:
     markov_add(message.content);
-  parse_emotes(message.content);
-
+  print("Took " + str(time.time() - start) + " seconds to process message of " + str(len(split)) + " words");
+  #parse_emotes(message.content);
