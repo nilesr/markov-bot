@@ -10,8 +10,10 @@ con = sqlite3.connect("markov.db")
 con.execute("CREATE TABLE IF NOT EXISTS main (key TEXT, value TEXT, count INTEGER);")
 con.execute("CREATE TABLE IF NOT EXISTS emotes (key TEXT, value TEXT);")
 con.execute("CREATE INDEX IF NOT EXISTS the_index ON main (key, value)")
+con.execute("CREATE INDEX IF NOT EXISTS the_other_index ON emotes (key)")
 
 client = discord.Client()
+keys = []
 
 def allowed(x):
   if x == "🛑": return False
@@ -35,7 +37,10 @@ def markov_add(m):
   con.commit()
 
 def random_word():
-  return con.execute("SELECT key FROM main ORDER BY RANDOM() LIMIT 1;").fetchone()[0]
+  #return con.execute("SELECT key FROM main ORDER BY RANDOM() LIMIT 1;").fetchone()[0]
+  count = con.execute("SELECT COUNT(*) FROM main").fetchone()[0]
+  index = random.randint(0, count)
+  return con.execute("SELECT key FROM main LIMIT 1 OFFSET " + str(index)).fetchone()[0]
 
 async def react(message, success):
   emoji = "✅" if success else "❎"
@@ -77,7 +82,6 @@ def make_message(arg = False):
   for x in range(length):
     message.append(word)
     try:
-      #word = random.choice(db.Select("main", key = word)[0]["value"])
       words = con.execute("SELECT value, count FROM main WHERE key = ?", [word]).fetchall()
       words = [[x[0]] * int(x[1]) for x in words]
       flattened = []
@@ -92,7 +96,6 @@ def make_message(arg = False):
   return " ".join(message)
 
 def get_percents(word):
-  #raw = db.Select("main", key = word)
   words = con.execute("SELECT value, count FROM main WHERE key = ?", [word]).fetchall()
   if len(words) == 0: return "Never seen that word before"
   words = [[x[0], int(x[1])] for x in words]
@@ -113,15 +116,24 @@ async def on_ready():
   print('------')
 
 def parse_emotes(msg):
+  msg = msg.replace("><", "> <")
   msg = msg.split();
   for word in msg:
     if word.startswith("<:"):
-      #if len(db.Select("emotes", value = word)) == 0:
-      if len(con.execute("SELECT * FROM emotes WHERE value = ?", [word]).fetchall()) == 0:
+      word = word.split(">")[0] + ">"
+      if len(con.execute("SELECT 1 FROM emotes WHERE value = ?", [word]).fetchall()) == 0:
         print("found BRAND NEW EMOTE!!! " + word)
         con.execute("INSERT INTO emotes (key, value) VALUES (?, ?)", [word.split(":")[1], word])
         con.commit()
-        #db.Insert("emotes", key = word.split(":")[1], value = word)
+
+async def send_emotes(message, s):
+  res = con.execute("SELECT DISTINCT value FROM emotes WHERE key LIKE ?", ["%" + s + "%"]).fetchall()
+  res = [x[0] for x in res]
+  while len(res) > 0:
+    emotes = "".join(res[:20])
+    res = res[20:]
+    print(emotes)
+    await client.send_message(message.channel, ":`:" + emotes + ":`:")
 
 @client.event
 async def on_message(message):
@@ -140,15 +152,16 @@ async def on_message(message):
   print("Got message on channel ", message.channel, "from author", message.author, ":", message.content)
   split = message.content.split()
   if len(split) == 0: return
-  if split[0] in ["?small", "?big"]:
+  if split[0] in ["?femboy", "?tomboy"]:
     if "welcome-center" in str(message.channel):
       await client.send_message(message.server.get_channel('308342435430400012'), "Welcome <@" +str(message.author.id) + ">!");
   elif split[0] == "!down":
     await notify_pref(message, split)
     pass
   elif split[0] == "!help":
-    await client.send_message(message.channel, "Commands: `!markov` - Generates random text based on collected probabilities\n`!markov <starting word>` - Generates starting from a particular word\n`!markov <limit>` - Generates random text with the given length\n`!percents <word>` - Shows statistics on the given word")
+    await client.send_message(message.channel, "Commands: `!markov` - Generates random text based on collected probabilities\n`!markov <starting word>` - Generates starting from a particular word\n`!markov <limit>` - Generates random text with the given length\n`!percents <word>` - Shows statistics on the given word\n`!emote` - Picks a random emote and sends it\n`!emotes` - Dumps all emotes\n`!mask <message>` - Misspells some text\n`!mask10 <message>` - Misspells some text 10 times")
   elif split[0] == "!markov":
+    await client.send_typing(message.channel)
     args = message.content.split()
     arg = False
     if len(args) > 1:
@@ -158,8 +171,6 @@ async def on_message(message):
   elif split[0] == "!percents" and len(split) > 1:
     percents = get_percents(split[1])
     await client.send_message(message.channel, percents)
-  elif split[0] == "!emotes":
-    await client.send_message(message.channel, " ".join([x[0] for x in con.execute("SELECT value FROM emotes;").fetchall()]))
   elif split[0] == "!mask":
     await client.send_message(message.channel, mask.mask(" ".join(split[1:])))
   elif split[0] == "!mask10":
@@ -169,15 +180,37 @@ async def on_message(message):
       msg.append(curr)
       curr = mask.mask(curr)
     await client.send_message(message.channel, "\n".join(msg))
+  elif split[0] == "!emotes":
+    s = ""
+    if len(split) != 1: s = split[1]
+    count = con.execute("SELECT COUNT(*) FROM emotes WHERE key LIKE ?", ["%" + s + "%"]).fetchall()[0][0]
+    if count == 0:
+      await client.send_message(message.channel, "No results");
+    elif count > 30:
+      key = str(random.randint(0, 9999)).rjust(4, "0")
+      keys.append([key, lambda m: send_emotes(m, s)])
+      await client.send_message(message.channel, "There are " + str(count) + " emotes. Type " + key + " to confirm");
+    else:
+      await send_emotes(message, s)
+  elif split[0] == "!emote":
+    count = con.execute("SELECT COUNT(*) FROM emotes", []).fetchall()[0][0]
+    index = random.randint(0, count)
+    emote = con.execute("SELECT DISTINCT value FROM emotes LIMIT 1 OFFSET " + str(index), []).fetchall()[0][0]
+    await client.send_message(message.channel, ":`:" + emote + ":`:");
   elif len(split) == 1:
-    return;
-    if split[0] in ["no", "yes", "yeah", "rip", "oh", "hehe", "xd", "xD", "ayy", "lol", "what", "y", "n", "s", "waitwhat", "oof", "ok", "lmao", "Yes", "Nice"]: return;
-    #res = db.Select("emotes", key = split[0])
-    res = con.execute("SELECT value FROM emotes WHERE key = ?", [split[0]]).fetchall()
-    if len(res) != 0:
-      #await client.send_message(message.channel, res[0]["value"])
-      await client.send_message(message.channel, res[0][0])
+    for key in keys:
+      if key[0] == split[0]:
+        keys.remove(key)
+        await key[1](message)
+        return;
+    #if split[0] in ["no", "yes", "yeah", "rip", "oh", "hehe", "xd", "xD", "ayy", "lol", "what", "y", "n", "s", "waitwhat", "oof", "ok", "lmao", "Yes", "Nice"]: return;
+    if split[0][0] == ":" and split[0][-1] == ":":
+      split[0] = split[0][1:-1] # :xd: => xd
+      res = con.execute("SELECT value FROM emotes WHERE key = ?", [split[0]]).fetchall()
+      if len(res) != 0:
+        await client.send_message(message.channel, ":`:"+res[0][0]+":`:")
   else:
     markov_add(message.content);
+  parse_emotes(message.content);
   print("Took " + str(time.time() - start) + " seconds to process message of " + str(len(split)) + " words");
-  #parse_emotes(message.content);
+
