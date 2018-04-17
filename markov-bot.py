@@ -9,6 +9,10 @@ import mask
 con = sqlite3.connect("markov.db")
 con.execute("CREATE TABLE IF NOT EXISTS main (key TEXT, value TEXT, count INTEGER);")
 con.execute("CREATE INDEX IF NOT EXISTS the_index ON main (key, value)")
+con.execute("CREATE TABLE IF NOT EXISTS poll_users (user INT, vote INT);")
+con.execute("CREATE TABLE IF NOT EXISTS poll_options (id INT, option TEXT);")
+
+org_channel = "392057195530813453"
 
 client = discord.Client()
 
@@ -95,6 +99,39 @@ def get_percents(word):
     message.append(block[0] + ": " + str(float(block[1] * 100)/total)[:4] + "%")
   return ", ".join(message) + "\nWord seen " + str(total) + " time" + ("s" if total != 1 else "")
 
+def start_poll(users, options):
+  con.execute("DELETE FROM poll_users;")
+  con.execute("DELETE FROM poll_options;")
+  query = "INSERT INTO poll_users (user, vote) VALUES "
+  query += ", ".join(["(?, null)"] * len(users))
+  con.execute(query, [int(x) for x in users])
+  for i in range(len(options)):
+    query = "INSERT INTO poll_options (id, option) VALUES (?, ?)"
+    con.execute(query, [i, options[i]])
+
+def cast_vote(message, split):
+  if len(split) == 1:
+    return "\n".join([str(x[0]) + " - " + x[1] for x in con.execute("SELECT id, option from poll_options order by id asc").fetchall()])
+  res = con.execute("SELECT vote FROM poll_users WHERE user = ?", [int(message.author.id)]).fetchall()
+  if len(res) == 0:
+    return "You were not in the server when the vote was initiated, and cannot cast a vote"
+  try:
+    vote = int(split[1])
+  except:
+    return "Invalid number `" + split[1].replace("`","") + "`"
+  con.execute("UPDATE poll_users SET vote = ? where user = ?", [vote, int(message.author.id)])
+  return True
+
+def get_votes():
+  query = "select pu.vote, count(*) as c, po.option from poll_users pu left join poll_options po on po.id = pu.vote where vote is not null group by pu.vote order by c desc"
+  res = con.execute(query).fetchall()
+  if len(res) == 0: return False
+  total_count = sum(x[1] for x in res) / len(res)
+  msg = []
+  for row in res:
+    msg.append(str(row[0]) + " - " + row[2] + " - " + str(row[1]) + " votes, " + str(round(100 * row[1] / total_count, 2)))
+  return "\n".join(msg)
+
 @client.event
 async def on_ready():
   print('Logged in as')
@@ -144,6 +181,22 @@ async def on_message(message):
       msg.append(curr)
       curr = mask.mask(curr)
     await client.send_message(message.channel, "\n".join(msg))
+  elif split[0] == "!poll" and message.author.id == "158673755105787904":
+    options = [x.strip() for x in message.content.split("\n") if len(x.strip()) > 0 and x != "!poll"]
+    users = [x.id for x in message.server.members]
+    if len(users) == 0 or len(options) == 0:
+      await client.send_message(message.channel, "Error - zero options or zero users")
+    start_poll(users, options)
+    await client.send_message(message.channel, "Poll started with " + str(len(options)) + " and " + str(len(users)) + " authorized users")
+  elif split[0] == "!vote" and message.channel.id == org_channel:
+    result = cast_vote(message, split)
+    if result == True:
+      await client.add_reaction(message, "✅")
+    else:
+      await client.send_message(message.channel, result)
+  elif split[0] == "!votes" and message.channel.id == org_channel:
+    msg = get_votes()
+    if msg: await client.send_message(message.channel, msg)
   else:
     markov_add(message.content);
   print("Took " + str(time.time() - start) + " seconds to process message of " + str(len(split)) + " words");
